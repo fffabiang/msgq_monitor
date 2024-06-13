@@ -4,8 +4,41 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <ctype.h>
+#include <stdarg.h>
+
+// Define constants for log levels
+#define DEB "D"
+#define NOT "I"
+#define BAD "E"
 
 #define BUFFER_SIZE 1024
+
+// Function to log messages with a specific format
+void set_appmsgX(const char *log_level, const char *format, ...) {
+    // Buffer to hold the final log message
+    char log_msg[1024];
+    
+    // Prefix the log message with the log level
+    snprintf(log_msg, sizeof(log_msg), "[%s] ", log_level);
+    
+    // Calculate the length of the log level prefix
+    size_t prefix_len = strlen(log_msg);
+    
+    // Create a variable argument list
+    va_list args;
+    
+    // Initialize the variable argument list
+    va_start(args, format);
+    
+    // Format the message and append it to the log level prefix
+    vsnprintf(log_msg + prefix_len, sizeof(log_msg) - prefix_len, format, args);
+    
+    // Clean up the variable argument list
+    va_end(args);
+    
+    // Print the final log message
+    printf("%s\n", log_msg);
+}
 
 void get_msgqueue_usage(const char* key, int* used_bytes, int* messages) {
     FILE *fp;
@@ -16,7 +49,7 @@ void get_msgqueue_usage(const char* key, int* used_bytes, int* messages) {
 
     // Execute the ipcs -q command and open a pipe to read the output
     if ((fp = popen(command, "r")) == NULL) {
-        perror("popen");
+        set_appmsgX(BAD,"popen");
         exit(EXIT_FAILURE);
     }
 
@@ -36,7 +69,7 @@ void get_msgqueue_usage(const char* key, int* used_bytes, int* messages) {
     }
 
     if (!found) {
-        fprintf(stderr, "No message queue with key %s found.\n", key);
+        set_appmsgX(BAD, "No message queue with key %s found.\n", key);
         exit(EXIT_FAILURE);
     }
 
@@ -66,12 +99,12 @@ int get_value_from_file(const char *filename) {
 
     fp = fopen(filename, "r");
     if (fp == NULL) {
-        perror("fopen");
+        set_appmsgX(BAD,"fopen");
         exit(EXIT_FAILURE);
     }
 
     if (fscanf(fp, "%d", &value) != 1) {
-        perror("fscanf");
+        set_appmsgX(BAD,"fscanf");
         fclose(fp);
         exit(EXIT_FAILURE);
     }
@@ -149,7 +182,7 @@ char *trim_whitespace(char *str) {
 void read_config(const char *filename, char *mode, char *owner) {
     FILE *file = fopen(filename, "r");
     if (file == NULL) {
-        perror("Error opening file");
+        set_appmsgX(BAD,"Error opening file");
         exit(EXIT_FAILURE);
     }
 
@@ -187,14 +220,14 @@ int main(int argc, char *argv[]) {
 
     // Validate number of arguments
     if (argc != 3) {
-        fprintf(stderr, "Usage: %s <message_queue_key> <usage_limit 0-99>\n", argv[0]);
+        set_appmsgX(BAD, "Usage: %s <message_queue_key> <usage_limit 0-99>", argv[0]);
         exit(EXIT_FAILURE);
     }
 
     // Validate usage limit values
     if (!isStringIntRange(argv[2],0, 99))
     {
-        fprintf(stderr, "Invalid usage_limit argument. Usage: %s <message_queue_key> <usage_limit 0-99>\n", argv[0]);
+        set_appmsgX(BAD, "Invalid usage_limit argument. Usage: %s <message_queue_key> <usage_limit 0-99>", argv[0]);
         exit(EXIT_FAILURE);
     }
 
@@ -202,25 +235,25 @@ int main(int argc, char *argv[]) {
     read_config("monmsgq.config", &mode, owner);
     if (mode == '\0')
     {
-        fprintf(stderr, "Missing MODE parameter in configuration file.\n");
+        set_appmsgX(BAD, "Missing MODE parameter in configuration file.");
         exit(EXIT_FAILURE);
     }else if (mode == 'O' && strlen(owner)==0)
     {
-        fprintf(stderr, "Missing OWNER parameter in configuration file.\n");
+        set_appmsgX(BAD, "Missing OWNER parameter in configuration file.");
         exit(EXIT_FAILURE);
     }
 
-    printf("Mode: %c\n", mode);
-    printf("Owner: %s\n", owner);
+    set_appmsgX(DEB,"Mode: %c", mode);
+    set_appmsgX(DEB,"Owner: %s", owner);
 
     // Get message queue limits
     get_msg_queue_limits(&msgmax, &msgmnb, &msgmni);
 
     // Print the values
     max_messages = msgmnb / msgmax;
-    printf("Maximum size of a single message (msgmax): %d\n", msgmax);
-    printf("Maximum number of bytes in all messages on a single queue (msgmnb): %d\n", msgmnb);
-    printf("Maximum number of messages: %d\n", max_messages);
+    set_appmsgX(DEB,"Maximum size of a single message (msgmax): %d", msgmax);
+    set_appmsgX(DEB,"Maximum number of bytes in all messages on a single queue (msgmnb): %d", msgmnb);
+    set_appmsgX(DEB,"Maximum number of messages: %d", max_messages);
 
     // Print message queue search
     const char *key = argv[1];
@@ -231,10 +264,9 @@ int main(int argc, char *argv[]) {
         
         float byte_usage = ((float)used_bytes / msgmnb) * 100;
 
-        printf("\nFor message queue %s:\n", key);
-        printf("Used bytes: %d (%.2lf%c)\n", used_bytes, byte_usage,'%');
-        printf("Limit %d\n", usageLimit);
-
+        set_appmsgX(DEB,"\nFor message queue %s:", key);
+        set_appmsgX(DEB,"Used bytes: %d (%.2lf%c)", used_bytes, byte_usage,'%');
+        set_appmsgX(DEB,"Limit %d", usageLimit);
 
     }
     return 0;
