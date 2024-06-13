@@ -162,7 +162,7 @@ int main(int argc, char *argv[]) {
 
         printf("\nFor message queue %s:\n", key);
         printf("Used bytes: %d (%.2lf%c)\n", used_bytes, byte_usage,'%');
-        printf("LIMIT %d\n", usageLimit);
+        printf("Limit %d\n", usageLimit);
 
 
     }
