@@ -126,21 +126,92 @@ int isStringIntRange(const char *str, int min, int max) {
 }
 
 
+// Function to trim leading and trailing whitespace
+char *trim_whitespace(char *str) {
+    char *end;
+
+    // Trim leading space
+    while (isspace((unsigned char)*str)) str++;
+
+    if (*str == 0) // All spaces
+        return str;
+
+    // Trim trailing space
+    end = str + strlen(str) - 1;
+    while (end > str && isspace((unsigned char)*end)) end--;
+
+    // Write new null terminator
+    end[1] = '\0';
+
+    return str;
+}
+
+void read_config(const char *filename, char *mode, char *owner) {
+    FILE *file = fopen(filename, "r");
+    if (file == NULL) {
+        perror("Error opening file");
+        exit(EXIT_FAILURE);
+    }
+
+    char line[256];
+    while (fgets(line, sizeof(line), file)) {
+        // Ignore commented lines
+        if (line[0] == '#') {
+            continue;
+        }
+
+        // Find the position of '='
+        char *equals = strchr(line, '=');
+        if (equals) {
+            *equals = '\0';
+            char *key = trim_whitespace(line);
+            char *value = trim_whitespace(equals + 1);
+
+            if (strcmp(key, "MODE") == 0) {
+                *mode = value[0];  // Store the first character of the value
+            } else if (strcmp(key, "OWNER") == 0) {
+                strcpy(owner, value);
+            }
+        }
+    }
+
+    fclose(file);
+}
+
 int main(int argc, char *argv[]) {
     
+    char mode = '\0';
+    char owner[50] = "";
+    int msgmax, msgmnb, msgmni, max_messages;
+    int used_bytes, messages;
+
+    // Validate number of arguments
     if (argc != 3) {
         fprintf(stderr, "Usage: %s <message_queue_key> <usage_limit 0-99>\n", argv[0]);
         exit(EXIT_FAILURE);
     }
 
+    // Validate usage limit values
     if (!isStringIntRange(argv[2],0, 99))
     {
         fprintf(stderr, "Invalid usage_limit argument. Usage: %s <message_queue_key> <usage_limit 0-99>\n", argv[0]);
         exit(EXIT_FAILURE);
     }
 
-    int msgmax, msgmnb, msgmni, max_messages;
-    int used_bytes, messages;
+    // Validate config file
+    read_config("monmsgq.config", &mode, owner);
+    if (mode == '\0')
+    {
+        fprintf(stderr, "Missing MODE parameter in configuration file.\n");
+        exit(EXIT_FAILURE);
+    }else if (mode == 'O' && strlen(owner)==0)
+    {
+        fprintf(stderr, "Missing OWNER parameter in configuration file.\n");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Mode: %c\n", mode);
+    printf("Owner: %s\n", owner);
 
     // Get message queue limits
     get_msg_queue_limits(&msgmax, &msgmnb, &msgmni);
