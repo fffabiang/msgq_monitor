@@ -9,7 +9,7 @@ BIN_DIR = bin
 TARGET = $(BIN_DIR)/monmsgq
 
 # Define the compiler flags
-CFLAGS = -Wall -Werror -O2
+CFLAGS = -Wall -Werror -Wno-unused-variable -O2
 
 # Define the object files
 OBJ = $(SRC:.c=.o)

@@ -12,6 +12,9 @@
 #define BAD "E"
 
 #define BUFFER_SIZE 1024
+#define MAX_LIST_ITEMS 100
+#define MAX_KEY_LENGTH 20 // Including null terminator
+
 
 // Function to log messages with a specific format
 void set_appmsgX(const char *log_level, const char *format, ...) {
@@ -39,6 +42,56 @@ void set_appmsgX(const char *log_level, const char *format, ...) {
     // Print the final log message
     printf("%s\n", log_msg);
 }
+
+
+void read_list_from_config(const char *filename, char list[MAX_LIST_ITEMS][MAX_KEY_LENGTH], int *list_count) {
+    FILE *file = fopen(filename, "r");
+    if (!file) {
+        perror("Error opening file");
+        exit(EXIT_FAILURE);
+    }
+
+    char line[256];
+    int in_list_section = 0;
+    *list_count = 0;
+
+    while (fgets(line, sizeof(line), file)) {
+        // Trim newline characters
+        line[strcspn(line, "\r\n")] = '\0';
+
+        // Check for the beginning of the list section
+        if (strcmp(line, "LIST BEGIN") == 0) {
+            in_list_section = 1;
+            continue;
+        }
+
+        // Check for the end of the list section
+        if (strcmp(line, "LIST END") == 0) {
+            in_list_section = 0;
+            continue;
+        }
+
+        // If we're in the list section, add the item to the array
+        if (in_list_section) {
+            if (*list_count >= MAX_LIST_ITEMS) {
+                fprintf(stderr, "Error: Too many items in the list\n");
+                exit(EXIT_FAILURE);
+            }
+            // Ensure the string length is within bounds before copying
+            if (strlen(line) >= MAX_KEY_LENGTH) {
+                fprintf(stderr, "Error: List item too long\n");
+                exit(EXIT_FAILURE);
+            }
+            strncpy(list[*list_count], line, MAX_KEY_LENGTH - 1);
+            list[*list_count][MAX_KEY_LENGTH - 1] = '\0'; // Ensure null-termination
+            (*list_count)++;
+        }
+    }
+
+    fclose(file);
+}
+
+
 
 void get_msgqueue_usage(const char* key, int* used_bytes, int* messages) {
     FILE *fp;
@@ -93,6 +146,70 @@ void get_msgqueue_usage(const char* key, int* used_bytes, int* messages) {
     }
 }
 
+int isKeyInKeyList(char* key, char key_list[MAX_LIST_ITEMS][MAX_KEY_LENGTH], int key_list_count)
+{
+    for (int i = 0; i < key_list_count; i++) {
+        if (strcmp(key, key_list[i]) == 0) {
+            return 1; // Key found
+        }
+    }
+    return 0; // Key not found
+}
+
+// Function to print message queue usage based on mode and owner
+void print_msgqueue_usage(char mode, const char *owner, char key_list[MAX_LIST_ITEMS][MAX_KEY_LENGTH], int key_list_count) {
+    FILE *fp;
+    char buffer[BUFFER_SIZE];
+    char command[] = "ipcs -q";
+    char *line;
+
+    // Execute the ipcs -q command and open a pipe to read the output
+    if ((fp = popen(command, "r")) == NULL) {
+        fprintf(stderr, "Error: Unable to execute command 'ipcs -q'\n");
+        exit(EXIT_FAILURE);
+    }
+
+
+    // Read the command output line by line
+    set_appmsgX(DEB,"Printing Message Queue Usage");
+    while (fgets(buffer, sizeof(buffer), fp) != NULL) {
+
+        // Check if the line contains column headers
+        if (strstr(buffer, "Message") != NULL || strstr(buffer, "key") != NULL || strstr(buffer, "msqid") != NULL ||
+            strstr(buffer, "owner") != NULL || strstr(buffer, "perms") != NULL ||
+            strstr(buffer, "used-bytes") != NULL || strstr(buffer, "messages") != NULL) {
+            // Skip the header lines
+            continue;
+        }
+
+        // Tokenize the line to extract relevant information
+        char *key, *queue_owner;
+        
+        char *token = strtok(buffer, " \t\n");        
+        if (token != NULL) { 
+            key = token;  // Token 1: key
+            token = strtok(NULL, " \t\n");  if (token == NULL) continue; // Token 2: msgqid
+            token = strtok(NULL, " \t\n");  if (token == NULL) continue; // Token 3: owner
+            queue_owner = token;            
+            token = strtok(NULL, " \t\n");  if (token == NULL) continue; // Token 4: perms
+            token = strtok(NULL, " \t\n");  if (token == NULL) continue; // Token 5: used_bytes
+            int bytes = atoi(token);
+            token = strtok(NULL, " \t\n");  // Token 6: messages
+            int messages = atoi(token);
+            if ( mode == 'A' || (mode == 'O' && strcmp(queue_owner, owner) == 0) || (mode == 'L' && isKeyInKeyList(key, key_list, key_list_count))) {
+                set_appmsgX(DEB,"Message Queue Key: %s, Used Bytes: %d, Messages: %d, Owner: %s",
+                                    key, bytes, messages, queue_owner);
+            }
+        }
+    }
+
+    // Close the pipe
+    if (pclose(fp) == -1) {
+        perror("pclose");
+        exit(EXIT_FAILURE);
+    }
+}
+
 int get_value_from_file(const char *filename) {
     FILE *fp;
     int value;
@@ -125,39 +242,6 @@ void get_msg_queue_limits(int *msgmax, int *msgmnb, int *msgmni) {
 }
 
 
-int isStringIntRange(const char *str, int min, int max) {
-    // Check if the string is empty
-    if (*str == '\0') {
-        return 0;
-    }
-
-    int number = 0;
-
-    // Check each character in the string
-    while (*str != '\0') {
-        // Check if the character is a digit
-        if (!isdigit(*str)) {
-            return 0;
-        }
-
-        // Convert the character to an integer
-        int digit = *str - '0';
-
-        // Update the number by multiplying by 10 and adding the new digit
-        number = number * 10 + digit;
-
-        // Move to the next character
-        str++;
-    }
-
-    // Check if the integer is within the range of 0 to 99
-    if (number < min || number > max) {
-        return 0;
-    }
-
-    return 1;
-}
-
 
 // Function to trim leading and trailing whitespace
 char *trim_whitespace(char *str) {
@@ -179,7 +263,7 @@ char *trim_whitespace(char *str) {
     return str;
 }
 
-void read_config(const char *filename, char *mode, char *owner) {
+void read_config(const char *filename, char *mode, char *owner, int* usage_limit) {
     FILE *file = fopen(filename, "r");
     if (file == NULL) {
         set_appmsgX(BAD,"Error opening file");
@@ -204,6 +288,9 @@ void read_config(const char *filename, char *mode, char *owner) {
                 *mode = value[0];  // Store the first character of the value
             } else if (strcmp(key, "OWNER") == 0) {
                 strcpy(owner, value);
+            } else if (strcmp(key, "LIMIT") == 0)
+            {
+                *usage_limit = atoi(value);
             }
         }
     }
@@ -215,60 +302,52 @@ int main(int argc, char *argv[]) {
     
     char mode = '\0';
     char owner[50] = "";
+    int usage_limit = -1;
     int msgmax, msgmnb, msgmni, max_messages;
     int used_bytes, messages;
+    char key_list[MAX_LIST_ITEMS][MAX_KEY_LENGTH];
+    int key_list_count;
+
 
     // Validate number of arguments
-    if (argc != 3) {
-        set_appmsgX(BAD, "Usage: %s <message_queue_key> <usage_limit 0-99>", argv[0]);
+    if (argc != 2) {
+        set_appmsgX(BAD, "Usage: %s <config_filename>", argv[0]);
         exit(EXIT_FAILURE);
     }
-
-    // Validate usage limit values
-    if (!isStringIntRange(argv[2],0, 99))
-    {
-        set_appmsgX(BAD, "Invalid usage_limit argument. Usage: %s <message_queue_key> <usage_limit 0-99>", argv[0]);
-        exit(EXIT_FAILURE);
-    }
-
+ 
     // Validate config file
-    read_config("monmsgq.config", &mode, owner);
+    read_config(argv[1], &mode, owner, &usage_limit);
     if (mode == '\0')
     {
         set_appmsgX(BAD, "Missing MODE parameter in configuration file.");
+        exit(EXIT_FAILURE);
+    }else if (usage_limit < 0 || usage_limit > 99){
+        set_appmsgX(BAD, "Missing valid LIMIT (0-99) parameter in configuration file.");
         exit(EXIT_FAILURE);
     }else if (mode == 'O' && strlen(owner)==0)
     {
         set_appmsgX(BAD, "Missing OWNER parameter in configuration file.");
         exit(EXIT_FAILURE);
     }
+    
+    // Read list keys in mode L
+    if (mode == 'L')
+    {
+        read_list_from_config(argv[1], key_list, &key_list_count);
+    }   
 
-    set_appmsgX(DEB,"Mode: %c", mode);
-    set_appmsgX(DEB,"Owner: %s", owner);
+    set_appmsgX(DEB,"Execution parameters | Mode: %c | Owner: %s | Limit: %d", mode, owner, usage_limit);
 
     // Get message queue limits
     get_msg_queue_limits(&msgmax, &msgmnb, &msgmni);
 
     // Print the values
     max_messages = msgmnb / msgmax;
-    set_appmsgX(DEB,"Maximum size of a single message (msgmax): %d", msgmax);
-    set_appmsgX(DEB,"Maximum number of bytes in all messages on a single queue (msgmnb): %d", msgmnb);
-    set_appmsgX(DEB,"Maximum number of messages: %d", max_messages);
+    set_appmsgX(DEB,"OS message queue limits | max msg size (%d) | max queue bytes (%d) | max msgs (%d)", msgmax, msgmnb, max_messages);
 
     // Print message queue search
-    const char *key = argv[1];
-    get_msgqueue_usage(key, &used_bytes, &messages);
-    if (used_bytes != -1 && messages != -1) {
+    print_msgqueue_usage(mode, owner, key_list, key_list_count);
 
-        int usageLimit = atoi(argv[2]);
-        
-        float byte_usage = ((float)used_bytes / msgmnb) * 100;
-
-        set_appmsgX(DEB,"\nFor message queue %s:", key);
-        set_appmsgX(DEB,"Used bytes: %d (%.2lf%c)", used_bytes, byte_usage,'%');
-        set_appmsgX(DEB,"Limit %d", usageLimit);
-
-    }
     return 0;
 }
 
