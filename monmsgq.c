@@ -11,6 +11,8 @@
 #define MAX_LIST_ITEMS 100
 #define MAX_KEY_LENGTH 20 // Including null terminator
 
+extern char logfile_name[50];
+
 void read_list_from_config(const char *filename, char list[MAX_LIST_ITEMS][MAX_KEY_LENGTH], int *list_count) {
     FILE *file = fopen(filename, "r");
     if (!file) {
@@ -275,6 +277,8 @@ int main(int argc, char *argv[]) {
     char key_list[MAX_LIST_ITEMS][MAX_KEY_LENGTH];
     int key_list_count;
 
+    // Set custom LOG filename
+    strcpy(logfile_name, "monmsgq-total.log");
 
     // Validate number of arguments
     if (argc != 2) {
