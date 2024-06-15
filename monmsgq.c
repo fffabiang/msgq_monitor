@@ -5,44 +5,11 @@
 #include <unistd.h>
 #include <ctype.h>
 #include <stdarg.h>
-
-// Define constants for log levels
-#define DEB "D"
-#define NOT "I"
-#define BAD "E"
+#include "logger.h"
 
 #define BUFFER_SIZE 1024
 #define MAX_LIST_ITEMS 100
 #define MAX_KEY_LENGTH 20 // Including null terminator
-
-
-// Function to log messages with a specific format
-void set_appmsgX(const char *log_level, const char *format, ...) {
-    // Buffer to hold the final log message
-    char log_msg[1024];
-    
-    // Prefix the log message with the log level
-    snprintf(log_msg, sizeof(log_msg), "[%s] ", log_level);
-    
-    // Calculate the length of the log level prefix
-    size_t prefix_len = strlen(log_msg);
-    
-    // Create a variable argument list
-    va_list args;
-    
-    // Initialize the variable argument list
-    va_start(args, format);
-    
-    // Format the message and append it to the log level prefix
-    vsnprintf(log_msg + prefix_len, sizeof(log_msg) - prefix_len, format, args);
-    
-    // Clean up the variable argument list
-    va_end(args);
-    
-    // Print the final log message
-    printf("%s\n", log_msg);
-}
-
 
 void read_list_from_config(const char *filename, char list[MAX_LIST_ITEMS][MAX_KEY_LENGTH], int *list_count) {
     FILE *file = fopen(filename, "r");
@@ -102,7 +69,7 @@ void get_msgqueue_usage(const char* key, int* used_bytes, int* messages) {
 
     // Execute the ipcs -q command and open a pipe to read the output
     if ((fp = popen(command, "r")) == NULL) {
-        set_appmsgX(BAD,"popen");
+        LOG(ERR,"popen");
         exit(EXIT_FAILURE);
     }
 
@@ -122,7 +89,7 @@ void get_msgqueue_usage(const char* key, int* used_bytes, int* messages) {
     }
 
     if (!found) {
-        set_appmsgX(BAD, "No message queue with key %s found.\n", key);
+        LOG(ERR, "No message queue with key %s found.\n", key);
         exit(EXIT_FAILURE);
     }
 
@@ -157,7 +124,7 @@ int isKeyInKeyList(char* key, char key_list[MAX_LIST_ITEMS][MAX_KEY_LENGTH], int
 }
 
 // Function to print message queue usage based on mode and owner
-void print_msgqueue_usage(char mode, const char *owner, char key_list[MAX_LIST_ITEMS][MAX_KEY_LENGTH], int key_list_count) {
+void print_msgqueue_usage_test(char mode, const char *owner, char key_list[MAX_LIST_ITEMS][MAX_KEY_LENGTH], int key_list_count) {
     FILE *fp;
     char buffer[BUFFER_SIZE];
     char command[] = "ipcs -q";
@@ -171,7 +138,7 @@ void print_msgqueue_usage(char mode, const char *owner, char key_list[MAX_LIST_I
 
 
     // Read the command output line by line
-    set_appmsgX(DEB,"Printing Message Queue Usage");
+    LOG(DEB,"Printing Message Queue Usage");
     while (fgets(buffer, sizeof(buffer), fp) != NULL) {
 
         // Check if the line contains column headers
@@ -197,7 +164,7 @@ void print_msgqueue_usage(char mode, const char *owner, char key_list[MAX_LIST_I
             token = strtok(NULL, " \t\n");  // Token 6: messages
             int messages = atoi(token);
             if ( mode == 'A' || (mode == 'O' && strcmp(queue_owner, owner) == 0) || (mode == 'L' && isKeyInKeyList(key, key_list, key_list_count))) {
-                set_appmsgX(DEB,"Message Queue Key: %s, Used Bytes: %d, Messages: %d, Owner: %s",
+                LOG(DEB,"Message Queue Key: %s, Used Bytes: %d, Messages: %d, Owner: %s",
                                     key, bytes, messages, queue_owner);
             }
         }
@@ -216,12 +183,12 @@ int get_value_from_file(const char *filename) {
 
     fp = fopen(filename, "r");
     if (fp == NULL) {
-        set_appmsgX(BAD,"fopen");
+        LOG(ERR,"fopen");
         exit(EXIT_FAILURE);
     }
 
     if (fscanf(fp, "%d", &value) != 1) {
-        set_appmsgX(BAD,"fscanf");
+        LOG(ERR,"fscanf");
         fclose(fp);
         exit(EXIT_FAILURE);
     }
@@ -266,7 +233,7 @@ char *trim_whitespace(char *str) {
 void read_config(const char *filename, char *mode, char *owner, int* usage_limit) {
     FILE *file = fopen(filename, "r");
     if (file == NULL) {
-        set_appmsgX(BAD,"Error opening file");
+        LOG(ERR,"Error opening file");
         exit(EXIT_FAILURE);
     }
 
@@ -311,7 +278,7 @@ int main(int argc, char *argv[]) {
 
     // Validate number of arguments
     if (argc != 2) {
-        set_appmsgX(BAD, "Usage: %s <config_filename>", argv[0]);
+        LOG(ERR, "Usage: %s <config_filename>", argv[0]);
         exit(EXIT_FAILURE);
     }
  
@@ -319,14 +286,14 @@ int main(int argc, char *argv[]) {
     read_config(argv[1], &mode, owner, &usage_limit);
     if (mode == '\0')
     {
-        set_appmsgX(BAD, "Missing MODE parameter in configuration file.");
+        LOG(ERR, "Missing MODE parameter in configuration file.");
         exit(EXIT_FAILURE);
     }else if (usage_limit < 0 || usage_limit > 99){
-        set_appmsgX(BAD, "Missing valid LIMIT (0-99) parameter in configuration file.");
+        LOG(ERR, "Missing valid LIMIT (0-99) parameter in configuration file.");
         exit(EXIT_FAILURE);
     }else if (mode == 'O' && strlen(owner)==0)
     {
-        set_appmsgX(BAD, "Missing OWNER parameter in configuration file.");
+        LOG(ERR, "Missing OWNER parameter in configuration file.");
         exit(EXIT_FAILURE);
     }
     
@@ -336,17 +303,16 @@ int main(int argc, char *argv[]) {
         read_list_from_config(argv[1], key_list, &key_list_count);
     }   
 
-    set_appmsgX(DEB,"Execution parameters | Mode: %c | Owner: %s | Limit: %d", mode, owner, usage_limit);
+    LOG(DEB,"Execution parameters | Mode: %c | Owner: %s | Limit: %d", mode, owner, usage_limit);
 
     // Get message queue limits
     get_msg_queue_limits(&msgmax, &msgmnb, &msgmni);
 
     // Print the values
-    max_messages = msgmnb / msgmax;
-    set_appmsgX(DEB,"OS message queue limits | max msg size (%d) | max queue bytes (%d) | max msgs (%d)", msgmax, msgmnb, max_messages);
+    LOG(DEB,"OS message queue limits | max msg size (%d) | max queue bytes (%d)", msgmax, msgmnb);
 
     // Print message queue search
-    print_msgqueue_usage(mode, owner, key_list, key_list_count);
+    print_msgqueue_usage_test(mode, owner, key_list, key_list_count);
 
     return 0;
 }
