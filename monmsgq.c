@@ -10,8 +10,22 @@
 #define BUFFER_SIZE 1024
 #define MAX_LIST_ITEMS 100
 #define MAX_KEY_LENGTH 20 // Including null terminator
+#define MAX_MAIL_MESSAGE_LENGTH 5000
 
+#define MAX_CONFIG_PARAM_KEY 50
+#define MAX_CONFIG_PARAM_VALUE 450
+#define STRINGIFY(x) STRINGIFY2(x)
+#define STRINGIFY2(x) #x
+#define MAX_CONFIG_LINE_SIZE (MAX_CONFIG_PARAM_KEY + MAX_CONFIG_PARAM_VALUE)
+
+char paramMailRecipients[MAX_CONFIG_PARAM_VALUE];
+char paramMailContent[MAX_CONFIG_PARAM_VALUE];
+char paramMailSubject[MAX_CONFIG_PARAM_VALUE];
+
+// External Log variables
 extern char logfile_name[50];
+extern LogLevel min_log_level;
+
 
 void read_list_from_config(const char *filename, char list[MAX_LIST_ITEMS][MAX_KEY_LENGTH], int *list_count) {
     FILE *file = fopen(filename, "r");
@@ -43,12 +57,12 @@ void read_list_from_config(const char *filename, char list[MAX_LIST_ITEMS][MAX_K
         // If we're in the list section, add the item to the array
         if (in_list_section) {
             if (*list_count >= MAX_LIST_ITEMS) {
-                fprintf(stderr, "Error: Too many items in the list\n");
+                LOG(ERR, "Error: Too many items in the list");
                 exit(EXIT_FAILURE);
             }
             // Ensure the string length is within bounds before copying
             if (strlen(line) >= MAX_KEY_LENGTH) {
-                fprintf(stderr, "Error: List item too long\n");
+                LOG(ERR, "Error: List item too long");
                 exit(EXIT_FAILURE);
             }
             strncpy(list[*list_count], line, MAX_KEY_LENGTH - 1);
@@ -125,22 +139,85 @@ int isKeyInKeyList(char* key, char key_list[MAX_LIST_ITEMS][MAX_KEY_LENGTH], int
     return 0; // Key not found
 }
 
+int is_queue_over_limit(int queue_usage, int max_queue_bytes, int usage_limit)
+{
+    return  (queue_usage * 100 / max_queue_bytes) >= usage_limit;
+}
+
+
+void build_alert_message(char alert_key_list[MAX_LIST_ITEMS][MAX_KEY_LENGTH], int alert_key_count, int usage_limit, char *message) {
+    
+    // Initialize the message
+    snprintf(message, MAX_MAIL_MESSAGE_LENGTH, "%s\nSIX server alert: There were %d queues found over the %d%% limit.\n",paramMailContent, alert_key_count, usage_limit);
+    strcat(message, "Queue keys to check:\n");
+
+    // Add each queue key to the message
+    for (int i = 0; i < alert_key_count; i++) {
+        strcat(message, "\t- ");
+        strcat(message, alert_key_list[i]);
+        strcat(message, "\n");
+    }
+
+    // Append the final line
+    strcat(message, "Please review the server.\n");
+}
+
+
+void send_mailx(char alert_key_list[MAX_LIST_ITEMS][MAX_KEY_LENGTH], int alert_key_count, int usage_limit)
+{
+    int status; // to receive mailx system call exit code
+    char command[MAX_MAIL_MESSAGE_LENGTH + 256];
+    char mailRecipients[256];
+
+    // Replace commas with spaces in the paramMailRecipients string
+    strcpy(mailRecipients, paramMailRecipients);
+    for (char* p = mailRecipients; *p != '\0'; ++p) {
+        if (*p == ',') {
+            *p = ' ';
+        }
+    }
+
+    char mailContent[MAX_MAIL_MESSAGE_LENGTH];
+    build_alert_message(alert_key_list, alert_key_count, usage_limit, mailContent);
+
+    snprintf(command, sizeof(command), "echo '%s' | mailx -s '%s' %s", mailContent, paramMailSubject, mailRecipients);
+
+    LOG(INF, "Executing mail command with (%d) bytes", strlen(command));
+
+    // Execute the command
+    status = system(command);
+
+    // The command was executed; check the exit status
+    if (WIFEXITED(status)) {
+        int exitStatus = WEXITSTATUS(status);
+        LOG(NOT, "Notification mail: mailx exited with status (%d)", exitStatus);
+
+    } else {
+        LOG(ERR, "Notification mail: mailx exited abnormally");
+    }
+
+
+}
+
 // Function to print message queue usage based on mode and owner
-void print_msgqueue_usage_test(char mode, const char *owner, char key_list[MAX_LIST_ITEMS][MAX_KEY_LENGTH], int key_list_count) {
+void process_msgqueue_usage(char mode, const char *owner, char key_list[MAX_LIST_ITEMS][MAX_KEY_LENGTH], int key_list_count, int max_queue_bytes, int usage_limit) {
+    
     FILE *fp;
     char buffer[BUFFER_SIZE];
     char command[] = "ipcs -q";
     char *line;
-
+    int alert_key_count = 0;
+    char alert_key_list[MAX_LIST_ITEMS][MAX_KEY_LENGTH];
+    int queues_processed = 0;
     // Execute the ipcs -q command and open a pipe to read the output
     if ((fp = popen(command, "r")) == NULL) {
-        fprintf(stderr, "Error: Unable to execute command 'ipcs -q'\n");
+        LOG(ERR, "Error: Unable to execute command 'ipcs -q'");
         exit(EXIT_FAILURE);
     }
 
 
     // Read the command output line by line
-    LOG(DEB,"Printing Message Queue Usage");
+    LOG(DEB,"Processing ipcs message queue usage");
     while (fgets(buffer, sizeof(buffer), fp) != NULL) {
 
         // Check if the line contains column headers
@@ -166,16 +243,37 @@ void print_msgqueue_usage_test(char mode, const char *owner, char key_list[MAX_L
             token = strtok(NULL, " \t\n");  // Token 6: messages
             int messages = atoi(token);
             if ( mode == 'A' || (mode == 'O' && strcmp(queue_owner, owner) == 0) || (mode == 'L' && isKeyInKeyList(key, key_list, key_list_count))) {
-                LOG(DEB,"Message Queue Key: %s, Used Bytes: %d, Messages: %d, Owner: %s",
-                                    key, bytes, messages, queue_owner);
+                LOG(INF,"Message Queue Key: %s, Owner: %s, Used Bytes: %d, Messages: %d",
+                                    queue_owner, key, bytes, messages);
+                
+                if (is_queue_over_limit(bytes, max_queue_bytes, usage_limit))
+                {
+                    LOG(NOT,"Message Queue %s over %d%c limit", key, usage_limit, '%'); 
+                    strcpy(alert_key_list[alert_key_count],key);
+                    alert_key_count++;
+                }
+                queues_processed++;
             }
         }
     }
 
+
     // Close the pipe
+    LOG(DEB,"Finished processing ipcs command output");
     if (pclose(fp) == -1) {
         perror("pclose");
         exit(EXIT_FAILURE);
+    }
+
+    LOG(INF,"Processed %d system queues.", queues_processed);
+
+    // Send alert 
+    if (alert_key_count > 0)
+    {
+        LOG(NOT,"Found %d queues over %d%c limit. Sending mail notification.", alert_key_count, usage_limit, '%');
+        send_mailx(alert_key_list, alert_key_count, usage_limit);
+    }else{
+        LOG(INF,"No queues over limit");
     }
 }
 
@@ -232,27 +330,54 @@ char *trim_whitespace(char *str) {
     return str;
 }
 
+// Function to trim leading and trailing whitespace and newline characters
+void trim(char *str) {
+    char *start = str;
+    char *end;
+
+    // Trim leading space
+    while (isspace((unsigned char)*start)) start++;
+
+    if (*start == 0) {  // All spaces?
+        *str = '\0';
+        return;
+    }
+
+    // Trim trailing space
+    end = start + strlen(start) - 1;
+    while (end > start && (isspace((unsigned char)*end) || *end == '\n')) end--;
+
+    // Write new null terminator
+    *(end + 1) = '\0';
+
+    // Shift the trimmed string back to the beginning
+    if (start != str) {
+        memmove(str, start, end - start + 2); // +2 to include the null terminator
+    }
+}
+
 void read_config(const char *filename, char *mode, char *owner, int* usage_limit) {
     FILE *file = fopen(filename, "r");
     if (file == NULL) {
-        LOG(ERR,"Error opening file");
+        LOG(ERR,"Error opening file %s", filename);
         exit(EXIT_FAILURE);
     }
 
-    char line[256];
+    char line[MAX_CONFIG_LINE_SIZE];
     while (fgets(line, sizeof(line), file)) {
+                
+        char key[MAX_CONFIG_PARAM_KEY], value[MAX_CONFIG_PARAM_VALUE];
+
         // Ignore commented lines
-        if (line[0] == '#') {
-            continue;
-        }
+        if (line[0] == '#' || line[0]=='\n') continue;
+        
+        if (sscanf(line, "%" STRINGIFY(MAX_CONFIG_PARAM_KEY) "[^=]=%" STRINGIFY(MAX_CONFIG_PARAM_VALUE) "[^\n]", key, value) == 2) {            
+            
+            trim(key);
+            trim(value);
 
-        // Find the position of '='
-        char *equals = strchr(line, '=');
-        if (equals) {
-            *equals = '\0';
-            char *key = trim_whitespace(line);
-            char *value = trim_whitespace(equals + 1);
-
+            //LOG(DEB,"key (%s) value (%s)\n", key, value);
+            
             if (strcmp(key, "MODE") == 0) {
                 *mode = value[0];  // Store the first character of the value
             } else if (strcmp(key, "OWNER") == 0) {
@@ -260,6 +385,32 @@ void read_config(const char *filename, char *mode, char *owner, int* usage_limit
             } else if (strcmp(key, "LIMIT") == 0)
             {
                 *usage_limit = atoi(value);
+            } else if (strcmp(key, "mail_subject") == 0) {
+                strcpy(paramMailSubject, value);
+            } else if (strcmp(key, "mail_recipients") == 0) {
+                strcpy(paramMailRecipients, value);
+            } else if (strcmp(key, "mail_content_header") == 0) {
+                strcpy(paramMailContent, value);
+            } else if (strcmp(key, "LOG_LEVEL") == 0)
+            {
+                // Set min log value
+                switch (value[0])
+                {
+                    case 'D':
+                        min_log_level = LOG_DEBUG;
+                        break;
+                    case 'I':
+                        min_log_level = LOG_INFO;
+                        break;
+                    case 'N':
+                        min_log_level = LOG_NOTICE;
+                        break;
+                    case 'E':
+                        min_log_level = LOG_ERROR;
+                        break;
+                    default:
+                        break;
+                }                
             }
         }
     }
@@ -270,7 +421,7 @@ void read_config(const char *filename, char *mode, char *owner, int* usage_limit
 int main(int argc, char *argv[]) {
     
     char mode = '\0';
-    char owner[50] = "";
+    char owner[MAX_CONFIG_PARAM_VALUE] = "";
     int usage_limit = -1;
     int msgmax, msgmnb, msgmni, max_messages;
     int used_bytes, messages;
@@ -279,16 +430,24 @@ int main(int argc, char *argv[]) {
 
     // Set custom LOG filename
     strcpy(logfile_name, "monmsgq-total.log");
+    
+    LOG(NOT, "Monitor process starts.");
 
     // Validate number of arguments
     if (argc != 2) {
-        LOG(ERR, "Usage: %s <config_filename>", argv[0]);
+        LOG(ERR, "Error: usage: %s <config_filename>", argv[0]);
         exit(EXIT_FAILURE);
     }
  
     // Validate config file
     read_config(argv[1], &mode, owner, &usage_limit);
-    if (mode == '\0')
+
+    LOG(INF,"Execution parameters | Mode: %c | Owner: %s | Limit: %d%% | Min Log Level %c", mode, owner, usage_limit, get_min_log_level_char());
+    
+    if (strlen(paramMailRecipients) == 0 || strlen(paramMailSubject) == 0 || strlen(paramMailContent) == 0) {
+        LOG(ERR, "Missing one or more valid mail parameters in configuration file.");
+        exit(EXIT_FAILURE);
+    }else if (mode == '\0')
     {
         LOG(ERR, "Missing MODE parameter in configuration file.");
         exit(EXIT_FAILURE);
@@ -307,8 +466,6 @@ int main(int argc, char *argv[]) {
         read_list_from_config(argv[1], key_list, &key_list_count);
     }   
 
-    LOG(DEB,"Execution parameters | Mode: %c | Owner: %s | Limit: %d", mode, owner, usage_limit);
-
     // Get message queue limits
     get_msg_queue_limits(&msgmax, &msgmnb, &msgmni);
 
@@ -316,7 +473,9 @@ int main(int argc, char *argv[]) {
     LOG(DEB,"OS message queue limits | max msg size (%d) | max queue bytes (%d)", msgmax, msgmnb);
 
     // Print message queue search
-    print_msgqueue_usage_test(mode, owner, key_list, key_list_count);
+    process_msgqueue_usage(mode, owner, key_list, key_list_count, msgmnb, usage_limit);
+
+    LOG(NOT, "Monitor process finished.");
 
     return 0;
 }

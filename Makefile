@@ -9,7 +9,7 @@ BIN_DIR = bin
 TARGET = $(BIN_DIR)/monmsgq
 
 # Define the compiler flags
-CFLAGS = -Wall -Werror -Wno-unused-variable -Wno-unused-result -O2
+CFLAGS = -Wall -Werror -Wno-unused-variable -Wno-unused-result -Wno-format-truncation -O2
 
 # Define the library path and name
 LIB_DIR = .  # Assuming liblogger.a is in the current directory

@@ -1,4 +1,5 @@
 #include "logger.h"
+#include <sys/time.h>
 
 /*
 The following format is considered for this LOG (Standard Log v03)
@@ -35,13 +36,14 @@ The following format is considered for this LOG (Standard Log v03)
 // Global variables
 char logfile_name[50] = "logfile.log"; // Log file name
 char log_type = 'E';                   // Field 1: Type of log
+LogLevel min_log_level = LOG_DEBUG;
 
 static char format_version[3] = "03";    // Field 2: Format version
 char module_name[17] = "sixbasbo"; // Field 5: Module name
 char module_version[9] = "01.00.00"; // Field 6: Module version
 static int module_name_loaded = 0;
 static char node_id[13] = "000000000000"; // Field 8: Node ID value
-static char tx_message_id[33] = "                                "; // Field 9: Message ID
+static char tx_message_id[33] = "00000000000000000000000000000000"; // Field 9: Message ID
 
 // Function to retrieve the current process name
 void get_process_name(char *process_name, size_t size) {
@@ -63,9 +65,66 @@ void get_process_name(char *process_name, size_t size) {
     }
 }
 
+char get_min_log_level_char()
+{
+    switch(min_log_level)
+    {
+        case LOG_DEBUG:
+            return 'D';
+        case LOG_INFO:
+            return 'I';
+        case LOG_NOTICE:
+            return 'N';
+        case LOG_ERROR:
+            return 'E';
+        default:
+            return 'D';
+    }
+}
+
+int log_level_allowed(const char* level)
+{
+
+    LogLevel logLevel;
+    if (strcmp(level, DEB) == 0) {
+        logLevel = LOG_DEBUG;
+    } else if (strcmp(level, INF) == 0) {
+        logLevel = LOG_INFO;
+    } else if (strcmp(level, NOT) == 0 || strcmp(level, WAR) == 0 || strcmp(level, AUD) == 0) {
+        logLevel = LOG_NOTICE;
+    } else {
+        logLevel = LOG_ERROR;
+    }
+
+    // Determine if the log level is allowed
+    switch (min_log_level) {
+        case LOG_DEBUG:
+            // Allow all levels
+            return 1;
+        case LOG_INFO:
+            // Allow all levels except DEBUG
+            return logLevel != LOG_DEBUG;
+        case LOG_NOTICE:
+            // Allow all levels except DEBUG, INFO, and AUDIT
+            return logLevel != LOG_DEBUG && logLevel != LOG_INFO;
+        case LOG_ERROR:
+            // Allow only ERROR level
+            return logLevel == LOG_ERROR;
+        default:
+            // If min_log_level is set to an unknown value, deny all
+            return 0;
+    }
+
+}
+
 
 void log_message(const char *level, const char *file, const char *func, int line, const char *format, ...) {
 
+    if (!log_level_allowed(level))
+    {
+        return;
+    }
+    
     if (!module_name_loaded) {
         // Retrieve the current process name
         get_process_name(module_name, sizeof(module_name));
@@ -80,10 +139,22 @@ void log_message(const char *level, const char *file, const char *func, int line
     }
 
     // Retrieve current date and time
-    char datetime[29];
-    time_t t = time(NULL);
-    struct tm *tm_info = localtime(&t);
-    strftime(datetime, 29, "%a %b %d %H:%M:%S.000 %Y", tm_info);
+    // char datetime[29];
+    // time_t t = time(NULL);
+    // struct tm *tm_info = localtime(&t);
+    // strftime(datetime, 29, "%a %b %d %H:%M:%S.000 %Y", tm_info);
+
+    // Retrieve current date and time with milliseconds
+    char datetime[40];
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    struct tm *tm_info = localtime(&tv.tv_sec);
+    strftime(datetime, sizeof(datetime), "%a %b %d %H:%M:%S", tm_info);
+
+    // Append milliseconds and year
+    char datetime_with_ms[70]; // Increase buffer size to be safe
+    snprintf(datetime_with_ms, sizeof(datetime_with_ms), "%s.%03ld %d", datetime, tv.tv_usec / 1000, tm_info->tm_year + 1900);
+
 
     // Prepare the message
     char message[1024];
@@ -95,11 +166,11 @@ void log_message(const char *level, const char *file, const char *func, int line
     // Format the log line
     char log_line[1500];
     snprintf(log_line, sizeof(log_line), 
-             "%c %s %s %s %16.16s %-8.8s %-22d %12.12s %-32.32s %80.80s %20.20s %5d %s\n",
+             "%c %s %s %s %16.16s %-8.8s %-22d %12.12s %-32.32s %30.30s %20.20s %5d %s\n",
              log_type,
              format_version,
              level,
-             datetime,
+             datetime_with_ms,
              module_name,
              module_version,
              getpid(),

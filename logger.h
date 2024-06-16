@@ -8,9 +8,18 @@
 #include <string.h>
 #include <unistd.h>
 
+typedef enum {
+    LOG_DEBUG,    // D
+    LOG_INFO,     // I
+    LOG_NOTICE,   // N
+    LOG_ERROR     // E
+} LogLevel;
+
+
 // Global variables
 extern char logfile_name[50];  // Log file name
 extern char log_type;          // Field 1: Type of log
+extern LogLevel min_log_level;
 
 // Log level macros
 #define DEB "D"
@@ -21,8 +30,12 @@ extern char log_type;          // Field 1: Type of log
 #define AUD "A"
 
 // Functions 
-#define LOG(level, format, ...) log_message(level, __FILE__, __func__, __LINE__, format, ##__VA_ARGS__)
-void log_message(const char *level, const char *file, const char *func, int line, const char *format, ...);
+
 // Macro to wrap the log_message function
+#define LOG(level, format, ...) log_message(level, __FILE__, __func__, __LINE__, format, ##__VA_ARGS__)
+
+void log_message(const char *level, const char *file, const char *func, int line, const char *format, ...);
+
+char get_min_log_level_char();
 
 #endif // LOGGER_H
