@@ -23,7 +23,7 @@ char paramMailContent[MAX_CONFIG_PARAM_VALUE];
 char paramMailSubject[MAX_CONFIG_PARAM_VALUE];
 
 // External Log variables
-extern char logfile_name[50];
+extern char logfile_name[100];
 extern LogLevel min_log_level;
 
 
@@ -244,7 +244,7 @@ void process_msgqueue_usage(char mode, const char *owner, char key_list[MAX_LIST
             int messages = atoi(token);
             if ( mode == 'A' || (mode == 'O' && strcmp(queue_owner, owner) == 0) || (mode == 'L' && isKeyInKeyList(key, key_list, key_list_count))) {
                 LOG(INF,"Message Queue Key: %s, Owner: %s, Used Bytes: %d, Messages: %d",
-                                    queue_owner, key, bytes, messages);
+                                    key, queue_owner, bytes, messages);
                 
                 if (is_queue_over_limit(bytes, max_queue_bytes, usage_limit))
                 {
@@ -273,7 +273,7 @@ void process_msgqueue_usage(char mode, const char *owner, char key_list[MAX_LIST
         LOG(NOT,"Found %d queues over %d%c limit. Sending mail notification.", alert_key_count, usage_limit, '%');
         send_mailx(alert_key_list, alert_key_count, usage_limit);
     }else{
-        LOG(INF,"No queues over limit");
+        LOG(NOT,"No queues over limit");
     }
 }
 
@@ -356,6 +356,67 @@ void trim(char *str) {
     }
 }
 
+void resolve_env_vars(const char* path, char* resolved_path, size_t resolved_path_size) {
+    if (path == NULL || resolved_path == NULL) {
+        return;
+    }
+
+    const char* p = path;
+    char* rp = resolved_path;
+    size_t remaining_size = resolved_path_size;
+
+    while (*p && remaining_size > 1) {
+        if (*p == '$') {
+            p++;
+            if (*p == '{') {
+                p++;
+                const char* end = strchr(p, '}');
+                if (!end) {
+                    LOG(ERR, "Unmatched '{' in LOG_DIR path.");
+                    return;
+                }
+
+                char var_name[256] = {0};
+                strncpy(var_name, p, end - p);
+                var_name[end - p] = '\0';
+
+                const char* var_value = getenv(var_name);
+                if (var_value) {
+                    while (*var_value && remaining_size > 1) {
+                        *rp++ = *var_value++;
+                        remaining_size--;
+                    }
+                }
+
+                p = end + 1;
+            } else {
+                const char* start = p;
+                while (*p && ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9') || *p == '_')) {
+                    p++;
+                }
+
+                char var_name[256] = {0};
+                strncpy(var_name, start, p - start);
+                var_name[p - start] = '\0';
+
+                const char* var_value = getenv(var_name);
+                if (var_value) {
+                    while (*var_value && remaining_size > 1) {
+                        *rp++ = *var_value++;
+                        remaining_size--;
+                    }
+                }
+            }
+        } else {
+            *rp++ = *p++;
+            remaining_size--;
+        }
+    }
+
+    *rp = '\0';
+}
+
+
 void read_config(const char *filename, char *mode, char *owner, int* usage_limit) {
     FILE *file = fopen(filename, "r");
     if (file == NULL) {
@@ -411,12 +472,22 @@ void read_config(const char *filename, char *mode, char *owner, int* usage_limit
                     default:
                         break;
                 }                
+            }else if (strcmp(key, "LOG_DIR")==0)
+            {
+                // If LOG_DIR found, set the path as the logfile path + base logfile_name
+                char resolved_path[1024];
+                resolve_env_vars(value,resolved_path,sizeof(resolved_path));
+                strcat(resolved_path, "/");
+                strcat(resolved_path, logfile_name);
+                strcpy(logfile_name,resolved_path);
             }
         }
     }
 
     fclose(file);
 }
+
+
 
 int main(int argc, char *argv[]) {
     
@@ -431,8 +502,6 @@ int main(int argc, char *argv[]) {
     // Set custom LOG filename
     strcpy(logfile_name, "monmsgq-total.log");
     
-    LOG(NOT, "Monitor process starts.");
-
     // Validate number of arguments
     if (argc != 2) {
         LOG(ERR, "Error: usage: %s <config_filename>", argv[0]);
@@ -442,6 +511,7 @@ int main(int argc, char *argv[]) {
     // Validate config file
     read_config(argv[1], &mode, owner, &usage_limit);
 
+    LOG(NOT, "Monitor process starts.");
     LOG(INF,"Execution parameters | Mode: %c | Owner: %s | Limit: %d%% | Min Log Level %c", mode, owner, usage_limit, get_min_log_level_char());
     
     if (strlen(paramMailRecipients) == 0 || strlen(paramMailSubject) == 0 || strlen(paramMailContent) == 0) {

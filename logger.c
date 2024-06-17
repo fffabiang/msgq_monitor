@@ -34,7 +34,7 @@ The following format is considered for this LOG (Standard Log v03)
 */
 
 // Global variables
-char logfile_name[50] = "logfile.log"; // Log file name
+char logfile_name[100] = "logfile.log"; // Log file name
 char log_type = 'E';                   // Field 1: Type of log
 LogLevel min_log_level = LOG_DEBUG;
 

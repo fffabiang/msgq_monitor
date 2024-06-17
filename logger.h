@@ -17,7 +17,7 @@ typedef enum {
 
 
 // Global variables
-extern char logfile_name[50];  // Log file name
+extern char logfile_name[100];  // Log file name
 extern char log_type;          // Field 1: Type of log
 extern LogLevel min_log_level;
 
